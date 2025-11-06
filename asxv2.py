@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
@@ -11,17 +12,25 @@ st.set_page_config(page_title="ASX 200 Clustering Dashboard", layout="wide")
 st.title("ASX 200 Stocks Clustering Dashboard")
 
 # -----------------------------
-# Load Excel Data
+# Load Excel Data (Relative Path)
 # -----------------------------
-file_path = r"C:\Users\woodni\OneDrive - Pitcher Partners Advisors Proprietary Limited\Desktop\ASX cluster analysis\ASX200_list.xlsx"
+# Get the directory where this script is located
+base_dir = os.path.dirname(os.path.abspath(__file__))
+
+# Construct a relative path to the Excel file
+file_path = os.path.join(base_dir, "ASX200_list.xlsx")
 
 try:
     df = pd.read_excel(file_path, sheet_name="Sheet2")
 except FileNotFoundError:
-    st.error(f"File not found: {file_path}")
+    st.error(
+        f"❌ File not found: {file_path}\n\n"
+        "Make sure 'ASX200_list.xlsx' is located in the same folder as 'asxv2.py' "
+        "and has been pushed to your GitHub repository before deploying to Streamlit Cloud."
+    )
     st.stop()
 except Exception as e:
-    st.error(f"Error loading Excel file: {e}")
+    st.error(f"⚠️ Error loading Excel file: {e}")
     st.stop()
 
 # Clean up column names
@@ -32,6 +41,7 @@ df.columns = df.columns.str.strip()
 # -----------------------------
 required_cols = ['Security', 'MarketCap', 'Avg Daily Return', 'Avg Daily Vol']
 missing = [col for col in required_cols if col not in df.columns]
+
 if missing:
     st.error(f"Missing columns in Excel sheet: {missing}")
     st.stop()
@@ -51,13 +61,11 @@ X_scaled = scaler.fit_transform(df[features])
 # -----------------------------
 st.sidebar.header("Clustering Settings")
 
-# Select clustering method
 cluster_method = st.sidebar.selectbox(
     "Select clustering method",
     ["KMeans", "Agglomerative", "DBSCAN"]
 )
 
-# Parameters based on method
 if cluster_method in ["KMeans", "Agglomerative"]:
     num_clusters = st.sidebar.slider("Number of clusters", 2, 10, 5)
 else:
@@ -84,7 +92,7 @@ elif cluster_method == "DBSCAN":
     df["Cluster"] = df["Cluster"].astype(str)
     df.loc[df["Cluster"] == "-1", "Cluster"] = "Noise"
 
-# Convert to string for consistent labeling (fixes legend scale issue)
+# Convert to string for consistent legend display
 df["Cluster"] = df["Cluster"].astype(str)
 
 # -----------------------------
@@ -111,7 +119,6 @@ fig = px.scatter(
     height=650
 )
 
-# Format axes to show whole numbers if needed
 fig.update_xaxes(tickformat=",")
 fig.update_yaxes(tickformat=",")
 
@@ -121,6 +128,7 @@ st.plotly_chart(fig, use_container_width=True)
 # Cluster Summary Table
 # -----------------------------
 st.subheader("Cluster Summary")
+
 if cluster_method != "DBSCAN":
     cluster_summary = df.groupby("Cluster")[features].mean().reset_index()
     st.dataframe(cluster_summary)
