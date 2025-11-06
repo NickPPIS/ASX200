@@ -1,97 +1,144 @@
-import streamlit as st
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
-from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN, MeanShift
+from sklearn.cluster import KMeans, AgglomerativeClustering, DBSCAN
 import plotly.express as px
+import streamlit as st
 
-st.set_page_config(page_title="ASX200 Clustering", layout="wide")
+# -----------------------------
+# Streamlit Page Setup
+# -----------------------------
+st.set_page_config(page_title="ASX 200 Clustering Dashboard", layout="wide")
+st.title("ASX 200 Stocks Clustering Dashboard")
 
-# ---------------------------------
-# Load and prepare the data
-# ---------------------------------
-@st.cache_data
-def load_data():
-    # Load columns F:H, K:M (adding column M for Volume)
-    df = pd.read_excel("ASX200_list.xlsx", sheet_name="Sheet2", usecols="F:H,K:M")
-    df.columns = ["Ticker", "Date", "Price", "Security", "MarketCap", "Volume"]
-    
-    # Forward-fill missing tickers
-    df["Ticker"] = df["Ticker"].ffill()
+# -----------------------------
+# Load Excel Data
+# -----------------------------
+file_path = r"C:\Users\woodni\OneDrive - Pitcher Partners Advisors Proprietary Limited\Desktop\ASX cluster analysis\ASX200_list.xlsx"
 
-    # Remove rows with no Price or MarketCap
-    df = df.dropna(subset=["Price", "MarketCap"])
+try:
+    df = pd.read_excel(file_path, sheet_name="Sheet2")
+except FileNotFoundError:
+    st.error(f"File not found: {file_path}")
+    st.stop()
+except Exception as e:
+    st.error(f"Error loading Excel file: {e}")
+    st.stop()
 
-    # Ensure Date is datetime
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    
-    # Calculate daily returns per Ticker
-    df = df.sort_values(by=["Ticker", "Date"])
-    df["DailyReturn"] = df.groupby("Ticker")["Price"].pct_change()
+# Clean up column names
+df.columns = df.columns.str.strip()
 
-    # Aggregate to one row per ticker (average daily return + last market cap + last volume)
-    df_summary = (
-        df.groupby(["Ticker", "Security"], as_index=False)
-        .agg({"MarketCap": "last", "DailyReturn": "mean", "Volume": "last"})
-        .dropna()
-    )
+# -----------------------------
+# Check for required columns
+# -----------------------------
+required_cols = ['Security', 'MarketCap', 'Avg Daily Return', 'Avg Daily Vol']
+missing = [col for col in required_cols if col not in df.columns]
+if missing:
+    st.error(f"Missing columns in Excel sheet: {missing}")
+    st.stop()
 
-    return df_summary
+# Keep only relevant columns and drop missing values
+df = df[required_cols].dropna()
 
-# Load data
-df = load_data()
+# -----------------------------
+# Feature Scaling
+# -----------------------------
+features = ['MarketCap', 'Avg Daily Return', 'Avg Daily Vol']
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(df[features])
 
-# ---------------------------------
-# User selections
-# ---------------------------------
-axis_options = ["MarketCap", "DailyReturn", "Volume"]
+# -----------------------------
+# Sidebar Controls
+# -----------------------------
+st.sidebar.header("Clustering Settings")
 
-x_axis = st.selectbox("Select X-axis variable:", axis_options)
-y_axis = st.selectbox("Select Y-axis variable:", axis_options)
-
-clustering_method = st.selectbox(
-    "Choose clustering method:",
-    ["KMeans", "Agglomerative", "DBSCAN", "MeanShift"]
+# Select clustering method
+cluster_method = st.sidebar.selectbox(
+    "Select clustering method",
+    ["KMeans", "Agglomerative", "DBSCAN"]
 )
 
-# ---------------------------------
-# Scale and cluster
-# ---------------------------------
-scaler = StandardScaler()
-df_scaled = scaler.fit_transform(df[[x_axis, y_axis]])
-
-if clustering_method == "KMeans":
-    k = st.slider("Number of clusters (k)", 2, 10, 3)
-    model = KMeans(n_clusters=k, random_state=42)
-elif clustering_method == "Agglomerative":
-    k = st.slider("Number of clusters (k)", 2, 10, 3)
-    model = AgglomerativeClustering(n_clusters=k)
-elif clustering_method == "DBSCAN":
-    eps = st.slider("Epsilon", 0.1, 5.0, 1.0)
-    min_samples = st.slider("Min Samples", 1, 10, 2)
-    model = DBSCAN(eps=eps, min_samples=min_samples)
+# Parameters based on method
+if cluster_method in ["KMeans", "Agglomerative"]:
+    num_clusters = st.sidebar.slider("Number of clusters", 2, 10, 5)
 else:
-    model = MeanShift()
+    num_clusters = None
 
-df["Cluster"] = model.fit_predict(df_scaled)
+if cluster_method == "DBSCAN":
+    eps_val = st.sidebar.slider("DBSCAN: eps (radius)", 0.1, 5.0, 1.0, 0.1)
+    min_samples_val = st.sidebar.slider("DBSCAN: min_samples", 2, 20, 5, 1)
 
-# ---------------------------------
-# Display results
-# ---------------------------------
+# -----------------------------
+# Apply Clustering
+# -----------------------------
+if cluster_method == "KMeans":
+    model = KMeans(n_clusters=num_clusters, random_state=42)
+    df["Cluster"] = model.fit_predict(X_scaled)
 
-# Show clustered data table WITHOUT Ticker column
-st.write("### Clustered Data")
-st.dataframe(df.drop(columns=["Ticker"]))
+elif cluster_method == "Agglomerative":
+    model = AgglomerativeClustering(n_clusters=num_clusters)
+    df["Cluster"] = model.fit_predict(X_scaled)
 
-# Plot scatter using Plotly WITHOUT ticker
+elif cluster_method == "DBSCAN":
+    model = DBSCAN(eps=eps_val, min_samples=min_samples_val)
+    df["Cluster"] = model.fit_predict(X_scaled)
+    df["Cluster"] = df["Cluster"].astype(str)
+    df.loc[df["Cluster"] == "-1", "Cluster"] = "Noise"
+
+# Convert to string for consistent labeling (fixes legend scale issue)
+df["Cluster"] = df["Cluster"].astype(str)
+
+# -----------------------------
+# X-Y Variable Selection
+# -----------------------------
+st.sidebar.header("Chart Axes")
+x_axis = st.sidebar.selectbox("Select X-axis variable", features, index=2)
+y_axis = st.sidebar.selectbox("Select Y-axis variable", features, index=1)
+
+# -----------------------------
+# Interactive Scatter Plot
+# -----------------------------
+bright_palette = px.colors.qualitative.Vivid
+
 fig = px.scatter(
     df,
     x=x_axis,
     y=y_axis,
-    color=df["Cluster"].astype(str),  # Convert to string for categorical coloring
-    hover_data=["Security", "MarketCap", "DailyReturn", "Volume"],  # Ticker removed
-    title=f"{clustering_method} Clusters: {x_axis} vs {y_axis}"
+    size="MarketCap",
+    color="Cluster",
+    color_discrete_sequence=bright_palette,
+    hover_data=["Security"],
+    title=f"{cluster_method} Clusters: {y_axis} vs {x_axis}",
+    height=650
 )
 
-fig.update_layout(legend_title_text='Cluster')
+# Format axes to show whole numbers if needed
+fig.update_xaxes(tickformat=",")
+fig.update_yaxes(tickformat=",")
 
 st.plotly_chart(fig, use_container_width=True)
+
+# -----------------------------
+# Cluster Summary Table
+# -----------------------------
+st.subheader("Cluster Summary")
+if cluster_method != "DBSCAN":
+    cluster_summary = df.groupby("Cluster")[features].mean().reset_index()
+    st.dataframe(cluster_summary)
+else:
+    st.info("Cluster summary not available for DBSCAN (variable cluster count).")
+
+# -----------------------------
+# View Stocks in Each Cluster
+# -----------------------------
+st.sidebar.header("Cluster Explorer")
+
+if cluster_method != "DBSCAN":
+    selected_cluster = st.sidebar.selectbox(
+        "View stocks in cluster",
+        sorted(df["Cluster"].unique())
+    )
+    st.subheader(f"Stocks in Cluster {selected_cluster}")
+    st.dataframe(df[df["Cluster"] == selected_cluster][["Security"] + features])
+else:
+    st.subheader("DBSCAN Cluster Breakdown")
+    st.dataframe(df[["Security", "Cluster"] + features])
